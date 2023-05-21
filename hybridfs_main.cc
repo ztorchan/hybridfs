@@ -1,0 +1,50 @@
+#include "hybridfs.h"
+
+static struct fuse_operations hybridfs_operations = {
+  .getattr = HybridFS::getattr,
+  .readlink = HybridFS::readlink,
+  .mknod = HybridFS::mknod,
+  .mkdir = HybridFS::mkdir,
+  .unlink = HybridFS::unlink,
+  .rmdir = HybridFS::rmdir,
+  .symlink = HybridFS::symlink,
+  .rename = HybridFS::rename,
+  .link = HybridFS::link,
+  .chmod = HybridFS::chmod,
+  .chown = HybridFS::chown,
+  .truncate = HybridFS::truncate,
+  .open = HybridFS::open,
+  .read = HybridFS::read,
+  .write = HybridFS::write,
+  .statfs = HybridFS::statfs,
+  .flush = HybridFS::flush,
+  .release = HybridFS::release,
+  .fsync = HybridFS::fsync,
+  .setxattr = HybridFS::setxattr,
+  .getxattr = HybridFS::getxattr,
+  .listxattr = HybridFS::listxattr,
+  .removexattr = HybridFS::removexattr,
+  .opendir = HybridFS::opendir,
+  .readdir = HybridFS::readdir,
+  .releasedir = HybridFS::releasedir,
+  .fsyncdir = HybridFS::fsyncdir,
+  .init = HybridFS::init,
+  .destroy = HybridFS::destroy,
+  .access = HybridFS::access,
+  .create = HybridFS::create,
+  .lock = HybridFS::lock,
+  .utimens = HybridFS::utimens,
+  .bmap = HybridFS::bmap,
+  .ioctl = HybridFS::ioctl,
+  .poll = HybridFS::poll,
+  .write_buf = HybridFS::write_buf,
+  .read_buf = HybridFS::read_buf,
+  .flock = HybridFS::flock,
+  .fallocate = HybridFS::fallocate, 
+  .copy_file_range = HybridFS::copy_file_range,
+  .lseek = HybridFS::lseek
+};
+
+int main() {
+  fuse_new();
+}
