@@ -228,6 +228,12 @@ int HybridFS::hfs_symlink(const char *oldpath, const char *newpath) {
 
 int HybridFS::hfs_rename(const char *oldpath, const char *newpath, unsigned int flags) {
   spdlog::debug("[rename] {%s} to {%s}", oldpath, newpath);
+
+  if(flags == RENAME_EXCHANGE) {
+    // do not support
+    return -1;
+  }
+
   // find and check old file
   struct hfs_dentry* old_dentry = find_dentry(oldpath);
   if(old_dentry == nullptr) {
@@ -241,48 +247,117 @@ int HybridFS::hfs_rename(const char *oldpath, const char *newpath, unsigned int 
   std::string real_old_path = (old_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + oldpath;
   std::string real_new_path = (old_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + newpath;
 
+  // find new dentry parent
   int rename_state;
   std::vector<std::string> dnames;
   split_path(newpath, dnames);
-  struct hfs_dentry* new_parent_dentry = find_parent_dentry(newpath);
-  if(new_parent_dentry == nullptr) {
+  std::string new_dentry_name = dnames[dnames.size() - 1];
+  struct hfs_dentry* new_dentry_parent = find_parent_dentry(newpath);
+  if(new_dentry_parent == nullptr) {
     // can not find parent dentry
     return -1;
   }
-  if(new_parent_dentry->d_type != FileType::DIRECTORY) {
+  if(new_dentry_parent->d_type != FileType::DIRECTORY) {
     // parent dentry is not directory
     return -1;
   }
 
   // for different flags
   if(flags == RENAME_WHITEOUT) {
+    auto it = new_dentry_parent->d_childs->find(new_dentry_name);
+    if(it != new_dentry_parent->d_childs->end() && it->second->d_type == FileType::DIRECTORY) {
+      // directory with same path exist
+      return -1;
+    }
     rename_state = rename(real_old_path.c_str(), real_new_path.c_str());
     if(rename_state == 0) {
       // rename successful
-      auto it = new_parent_dentry->d_childs->find(dnames[dnames.size() - 1]);
-      if(it != new_parent_dentry->d_childs->end()) {
+      if(it != new_dentry_parent->d_childs->end()) {
         // new dentry exists
         delete it->second;
-        new_parent_dentry->d_childs->erase(dnames[dnames.size() - 1]);
+        new_dentry_parent->d_childs->erase(new_dentry_name);
       }
       old_dentry->d_parent->d_childs->erase(old_dentry->d_name);
-      old_dentry->d_name = dnames[dnames.size() - 1];
-      old_dentry->d_parent = new_parent_dentry;
-      new_parent_dentry->d_childs->insert(std::make_pair(old_dentry->d_name, old_dentry));
+      old_dentry->d_name = new_dentry_name;
+      old_dentry->d_parent = new_dentry_parent;
+      new_dentry_parent->d_childs->insert(std::make_pair(old_dentry->d_name, old_dentry));
     }
   } else if(flags == RENAME_NOREPLACE) {
     // check new path does not exist
-    if(new_parent_dentry->d_childs->find(dnames[dnames.size() - 1]) != new_parent_dentry->d_childs->end()) {
-      // target new dentry exists
+    auto it = new_dentry_parent->d_childs->find(new_dentry_name);
+    if(it != new_dentry_parent->d_childs->end()) {
+      // same path exist
       return -1;
     }
+    rename_state = rename(real_old_path.c_str(), real_new_path.c_str());
+    if(rename_state == 0) {
+      // rename successful
+      old_dentry->d_parent->d_childs->erase(old_dentry->d_name);
+      old_dentry->d_name = new_dentry_name;
+      old_dentry->d_parent = new_dentry_parent;
+      new_dentry_parent->d_childs->insert(std::make_pair(old_dentry->d_name, old_dentry));
+    }
   }
-  // start to rename
+  return rename_state;
+}
 
+int HybridFS::hfs_link(const char *oldpath, const char *newpath) {
+  spdlog::debug("[link] {%s} to {%s}", oldpath, newpath);
+  struct hfs_dentry* old_dentry = find_dentry(oldpath);
+  if(old_dentry == nullptr) {
+    // old dentry does not exist
+    return -1;
+  }
+  if(old_dentry->d_type == FileType::DIRECTORY) {
+    // old dentry is a directory
+    return -1;
+  }
+  std::vector<std::string> dnames;
+  split_path(newpath, dnames);
+  std::string new_dentry_name = dnames[dnames.size() - 1];
+  struct hfs_dentry* new_dentry_parent = find_parent_dentry(newpath);
+  if(new_dentry_parent == nullptr) {
+    // can not find parent
+    return -1;
+  }
+  if(new_dentry_parent->d_type != FileType::DIRECTORY) {
+    // parent dentry is not directory
+    return -1;
+  }
+  if(new_dentry_parent->d_childs->find(new_dentry_name) != new_dentry_parent->d_childs->end()) {
+    // new dentry exists
+    return -1;
+  }
+  // real link
+  std::string real_old_path = (old_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + oldpath;
+  std::string real_new_path = (old_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + newpath;
+  int link_state = link(real_old_path.c_str(), real_new_path.c_str());
+  if(link_state == 0) {
+    new_dentry_parent->d_childs->insert(std::make_pair(new_dentry_name, new hfs_dentry{
+      new_dentry_name,
+      old_dentry->d_type,
+      old_dentry->d_area,
+      new_dentry_parent,
+      nullptr
+    }));
+  }
+  return link_state;
+}
 
+int HybridFS::hfs_chmod(const char *path, mode_t mode, struct fuse_file_info *fi){
+  spdlog::debug("[chmod] {%s}", path);
+  struct hfs_dentry* target_dentry = find_dentry(path);
+  if(target_dentry == nullptr) {
+    // can not find such file
+    return -1;
+  }
+  // real chmod
+  std::string real_path = (target_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + path;
+  return chmod(real_path.c_str(), mode);
 }
 
 
-void *HybridFS::init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
+
+void *HybridFS::hfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
 
 }
