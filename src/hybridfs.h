@@ -32,6 +32,8 @@ struct hfs_meta {
   std::string fs_path;
   std::string ssd_path;
   std::string hdd_path;
+  int64_t ssd_upper_limit;
+  int64_t hdd_lower_limit;
   struct hfs_dentry* root_dentry;
 };
 
