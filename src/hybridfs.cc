@@ -562,6 +562,107 @@ int HybridFS::hfs_getxattr(const char *path, const char *name, char *value, size
   return getxattr(real_path.c_str(), name, value, size);
 }
 
-void *HybridFS::hfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
+int HybridFS::hfs_listxattr(const char *path, char *list, size_t size) {
+  spdlog::debug("[getxattr] {%s}", path);
+  struct hfs_dentry* target_dentry = find_dentry(path);
+  if(target_dentry == nullptr) {
+    // no such file
+    return -1;
+  }
+  std::string real_path;
+  if(target_dentry->d_type == FileType::DIRECTORY) {
+    real_path = HFS_META->ssd_path + path;
+  } else {
+    real_path = (target_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + path;
+  }
+  return listxattr(real_path.c_str(), list, size);
+}
 
+int HybridFS::hfs_removexattr(const char *path, const char *name) {
+  spdlog::debug("[removexattr] {%s}", path);
+  struct hfs_dentry* target_dentry = find_dentry(path);
+  if(target_dentry == nullptr) {
+    // no such file
+    return -1;
+  }
+  std::string real_path;
+  if(target_dentry->d_type == FileType::DIRECTORY) {
+    real_path = HFS_META->ssd_path + path;
+  } else {
+    real_path = (target_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + path;
+  }
+  return removexattr(real_path.c_str(), name);
+}
+
+int HybridFS::hfs_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off, struct fuse_file_info *fi, enum fuse_readdir_flags flags) {
+  spdlog::debug("[readdir] {%s}", path);
+  struct hfs_dentry* target_dentry = find_dentry(path);
+  if(target_dentry == nullptr) {
+    // no such dentry
+    return -1;
+  }
+  if(target_dentry->d_type != FileType::DIRECTORY) {
+    // not a directory
+    return -1;
+  }
+  for(auto it = target_dentry->d_childs->begin(); it != target_dentry->d_childs->end(); it++) {
+    struct hfs_dentry* child = it->second;
+    struct stat st;
+    std::string real_path;
+    if(child->d_type == FileType::DIRECTORY) {
+      real_path = HFS_META->ssd_path + path + "/" + child->d_name;
+    } else {
+      real_path = (child->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + path + "/" + child->d_name;
+    }
+    if(stat(real_path.c_str(), &st) == 0) {
+      filler(buf, child->d_name.c_str(), &st, 0, FUSE_FILL_DIR_PLUS);
+    }
+  }
+  return 0;
+}
+
+void *HybridFS::hfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
+  spdlog::debug("[init]");
+  HFS_META->root_dentry = new hfs_dentry {
+    "",
+    FileType::DIRECTORY,
+    FileArea::NOTFILE,
+    nullptr,
+    new std::unordered_map<std::string, struct hfs_dentry*>()
+  };
+  return HFS_META;
+}
+
+void destroy_dfs(struct hfs_dentry* root) {
+  if(root == nullptr) {
+    return ;
+  }
+  for(auto it = root->d_childs->begin(); it != root->d_childs->end(); it++) {
+    destroy_dfs(it->second);
+    it->second = nullptr;
+  }
+  delete root->d_childs;
+  delete root;
+  return ;
+}
+
+void HybridFS::hfs_destroy(void *private_data) {
+  spdlog::debug("[destory]");
+  destroy_dfs(HFS_META->root_dentry);
+}
+
+int HybridFS::hfs_access(const char *path, int mode) {
+  spdlog::debug("[access] {%s}", path);
+  struct hfs_dentry* target_dentry = find_dentry(path);
+  if(target_dentry == nullptr) {
+    // no such dentry
+    return -1;
+  }
+  std::string real_path;
+  if(target_dentry->d_type == FileType::DIRECTORY) {
+    real_path = HFS_META->ssd_path + path;
+  } else {
+    real_path = (target_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + path;
+  }
+  return access(real_path.c_str(), mode);
 }
