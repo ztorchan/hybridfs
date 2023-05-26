@@ -5,6 +5,8 @@
 
 #include <cstdint>
 #include <cstdlib>
+#include <string>
+#include <unordered_map>
 
 #include <fuse3/fuse.h>
 

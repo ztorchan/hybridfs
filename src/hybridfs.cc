@@ -1,7 +1,7 @@
+#include <unistd.h>
 #include <sys/stat.h>
-#include <string>
+#include <sys/xattr.h>
 #include <vector>
-#include <unordered_map>
 
 #include <spdlog/spdlog.h>
 
@@ -434,6 +434,7 @@ int HybridFS::hfs_open(const char *path, struct fuse_file_info *fi) {
 }
 
 int HybridFS::hfs_read(const char *path, char *buf, size_t size, off_t off, struct fuse_file_info *fi) {
+  spdlog::debug("[read] {%s}", path);
   // check file
   struct hfs_dentry* target_dentry = find_dentry(path);
   if(target_dentry == nullptr) {
@@ -462,6 +463,7 @@ int HybridFS::hfs_read(const char *path, char *buf, size_t size, off_t off, stru
 }
 
 int HybridFS::hfs_write(const char *path, const char *buf, size_t size, off_t off, struct fuse_file_info *fi) {
+  spdlog::debug("[write] {%s}", path);
   // check file
   struct hfs_dentry* target_dentry = find_dentry(path);
   if(target_dentry == nullptr) {
@@ -501,6 +503,63 @@ int HybridFS::hfs_write(const char *path, const char *buf, size_t size, off_t of
     system(cmd);
   }
   return write_size;
+}
+
+int HybridFS::hfs_flush(const char *path, struct fuse_file_info *fi) {
+  spdlog::debug("[flush] {%s}", path);
+  return 0;
+}
+
+int HybridFS::hfs_release(const char *path, struct fuse_file_info *fi) {
+  spdlog::debug("[release] {%s}", path);
+  if(fi != nullptr) {
+    return close(fi->fh);
+  }
+  return 0;
+}
+
+int HybridFS::hfs_fsync(const char *path, int datasync, struct fuse_file_info *fi) {
+  spdlog::debug("[fsync] {%s}", path);
+  if(fi != nullptr) {
+    if(datasync) {
+      return fdatasync(fi->fh);
+    } else {
+      return fsync(fi->fh);
+    }
+  }
+  return 0;
+}
+
+int HybridFS::hfs_setxattr(const char *path, const char *name, const char *value, size_t size, int flags) {
+  spdlog::debug("[setxattr] {%s}", path);
+  struct hfs_dentry* target_dentry = find_dentry(path);
+  if(target_dentry == nullptr) {
+    // no such file
+    return -1;
+  }
+  std::string real_path;
+  if(target_dentry->d_type == FileType::DIRECTORY) {
+    real_path = HFS_META->ssd_path + path;
+  } else {
+    real_path = (target_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + path;
+  }
+  return setxattr(real_path.c_str(), name, value, size, flags);
+}
+
+int HybridFS::hfs_getxattr(const char *path, const char *name, char *value, size_t size) {
+  spdlog::debug("[getxattr] {%s}", path);
+  struct hfs_dentry* target_dentry = find_dentry(path);
+  if(target_dentry == nullptr) {
+    // no such file
+    return -1;
+  }
+  std::string real_path;
+  if(target_dentry->d_type == FileType::DIRECTORY) {
+    real_path = HFS_META->ssd_path + path;
+  } else {
+    real_path = (target_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + path;
+  }
+  return getxattr(real_path.c_str(), name, value, size);
 }
 
 void *HybridFS::hfs_init(struct fuse_conn_info *conn, struct fuse_config *cfg) {
