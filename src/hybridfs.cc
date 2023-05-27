@@ -391,46 +391,50 @@ int HybridFS::hfs_truncate(const char *path, off_t off, struct fuse_file_info *f
 
 int HybridFS::hfs_open(const char *path, struct fuse_file_info *fi) {
   spdlog::debug("[open] {%s}", path);
-  struct hfs_dentry* parent_dentry = find_dentry(path);
-  if(parent_dentry == nullptr) {
-    // parent doesn't exist
-    return -1;
-  }
-  if(parent_dentry->d_type != FileType::DIRECTORY) {
-    // parent is not directory
-    return -1;
-  }
   struct hfs_dentry* target_dentry = find_dentry(path);
   if(target_dentry == nullptr) {
-    // file doesn't exist
-    if(fi->flags | O_CREAT == 0) {
+    if((fi->flags | O_CREAT) == 0) {
+      // do not create
       return -1;
     }
-    // create dentry
-    std::vector<std::string> dnames;
-    split_path(path, dnames);
-    std::string new_dentry_name = dnames[dnames.size() - 1];
-    target_dentry = new hfs_dentry{
-      new_dentry_name,
-      FileType::REGULAR,
-      FileArea::SSD,
-      parent_dentry,
-      nullptr
-    };
-    parent_dentry->d_childs->insert(std::make_pair(new_dentry_name, target_dentry));
+    // check parent
+    struct hfs_dentry* parent_dentry = find_parent_dentry(path);
+    if(parent_dentry == nullptr) {
+      // parent does not exist
+      return -1;
+    }
+    // create
+    std::string real_path = HFS_META->ssd_path + path;
+    int open_state = open(real_path.c_str(), fi->flags);
+    if(open_state != -1){
+      fi->fh = open_state;
+      std::vector<std::string> dnames;
+      split_path(path, dnames);
+      std::string new_dentry_name = dnames[dnames.size() - 1];
+      parent_dentry->d_childs->insert(std::make_pair(new_dentry_name, new hfs_dentry{
+        new_dentry_name,
+        FileType::REGULAR,
+        FileArea::SSD,
+        parent_dentry,
+        nullptr
+      }));
+    }
+  } else if(target_dentry->d_type == FileType::DIRECTORY) {
+    // path is not a file
+    return -1;
   } else {
     // file exists
     if(fi->flags | O_EXCL == 0) {
+      // fail if exist
       return -1;
     }
+    std::string real_path = (target_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + path;
+    int open_state = open(real_path.c_str(), fi->flags);
+    if(open_state != -1){
+      fi->fh = open_state;
+    }
   }
-  // open file
-  std::string real_path = (target_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + path;
-  int open_state = open(real_path.c_str(), fi->flags);
-  if(open_state == -1){
-    fi->fh = open_state;
-  }
-  return open_state;
+  return 0;
 }
 
 int HybridFS::hfs_read(const char *path, char *buf, size_t size, off_t off, struct fuse_file_info *fi) {
@@ -665,4 +669,106 @@ int HybridFS::hfs_access(const char *path, int mode) {
     real_path = (target_dentry->d_area == FileArea::SSD ? HFS_META->ssd_path : HFS_META->hdd_path) + path;
   }
   return access(real_path.c_str(), mode);
+}
+
+int HybridFS::hfs_create(const char *path, mode_t mode, struct fuse_file_info *fi) {
+  spdlog::debug("[create] {%s}", path);
+  struct hfs_dentry* target_dentry = find_dentry(path);
+  if(target_dentry == nullptr) {
+    // create first
+    struct hfs_dentry* parent_dentry = find_parent_dentry(path);
+    if(parent_dentry == nullptr) {
+      // parent does not exist
+      return -1;
+    }
+    // open file
+    std::string real_path = HFS_META->ssd_path + path;
+    int open_state = creat(real_path.c_str(), mode);
+    if(open_state != -1){
+      fi->fh = open_state;
+      std::vector<std::string> dnames;
+      split_path(path, dnames);
+      std::string new_dentry_name = dnames[dnames.size() - 1];
+      parent_dentry->d_childs->insert(std::make_pair(new_dentry_name, new hfs_dentry{
+        new_dentry_name,
+        FileType::REGULAR,
+        FileArea::SSD,
+        parent_dentry,
+        nullptr
+      }));
+    }
+  } else if(target_dentry->d_type == FileType::DIRECTORY) {
+    // path is not a file
+    return -1;
+  } else {
+    // file exist
+    std::string real_path = (target_dentry->d_area == FileArea::SSD) ? HFS_META->ssd_path : HFS_META->hdd_path + path;
+    int open_state = open(real_path.c_str(), fi->flags);
+    if(open_state != -1) {
+      fi->fh = open_state;
+    }
+  }
+  return 0;
+}
+
+int HybridFS::hfs_utimens(const char *path, const struct timespec tv[2], struct fuse_file_info *fi) {
+  spdlog::debug("[utimens] {%s}", path);
+  struct hfs_dentry* target_dentry = find_dentry(path);
+  if(target_dentry == nullptr) {
+    // does not exist
+    return -1;
+  }
+  std::string real_path;
+  if(target_dentry->d_type == FileType::DIRECTORY) {
+    real_path = HFS_META->ssd_path + path;
+  } else {
+    real_path = (target_dentry->d_area == FileArea::SSD) ? HFS_META->ssd_path : HFS_META->hdd_path + path;
+  }
+  return utimensat(AT_FDCWD, real_path.c_str(), tv, AT_SYMLINK_NOFOLLOW);
+}
+
+ssize_t HybridFS::hfs_copy_file_range(const char *path_in, struct fuse_file_info *fi_in, off_t offset_in, 
+                                      const char *path_out, struct fuse_file_info *fi_out, off_t offset_out, 
+                                      size_t size, int flags) {
+  spdlog::debug("[copy_file_range] from {%s} to {%s}", path_in, path_out);
+  // check two files
+  struct hfs_dentry* in_dentry = find_dentry(path_in);
+  struct hfs_dentry* out_dentry = find_dentry(path_out);
+  if(in_dentry == nullptr || out_dentry == nullptr) {
+    return -1;
+  }
+  if(in_dentry->d_type == FileType::DIRECTORY || out_dentry->d_type == FileType::DIRECTORY) {
+    return -1;
+  }
+  // copy range
+  std::string real_in_path = (in_dentry->d_area == FileArea::SSD) ? HFS_META->ssd_path : HFS_META->hdd_path + path_in;
+  std::string real_out_path = (out_dentry->d_area == FileArea::SSD) ? HFS_META->ssd_path : HFS_META->hdd_path + path_out;
+  int in_fd = open(real_in_path.c_str(), O_RDONLY);
+  int out_fd = open(real_out_path.c_str(), O_WRONLY);
+  ssize_t copy_state = copy_file_range(in_fd, &offset_in, out_fd, &offset_out, size, flags);
+  close(in_fd);
+  close(out_fd);
+  // maybe migrate
+  struct stat st;
+  stat(real_out_path.c_str(), &st);
+  if(out_dentry->d_area == FileArea::SSD && st.st_size >= HFS_META->ssd_upper_limit) {
+    // move file to hdd
+    char cmd[1024];
+    sprintf(cmd, "mv %s %s", (HFS_META->ssd_path + path_out).c_str(), (HFS_META->hdd_path + path_out).c_str());
+    system(cmd);
+  } else if(out_dentry->d_area == FileArea::HDD && st.st_size <= HFS_META->hdd_lower_limit){
+    // move file to ssd
+    char cmd[1024];
+    sprintf(cmd, "mv %s %s", (HFS_META->hdd_path + path_out).c_str(), (HFS_META->ssd_path + path_out).c_str());
+    system(cmd);
+  }
+  // return
+  return copy_state;
+}
+
+off_t HybridFS::hfs_lseek(const char *path, off_t off, int whence, struct fuse_file_info *fi) {
+  if(fi == nullptr) {
+    return -1;
+  }
+  return lseek(fi->fh, off, whence);
 }
