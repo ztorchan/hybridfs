@@ -1,10 +1,10 @@
 cmake_minimum_required(VERSION 3.0.0)
-project(hybridfs CXX)
+project(hybridfs C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 
 if(NOT CMAKE_BUILD_TYPE)
-  set(CMAKE_BUILD_TYPE ReLWithDebInfo)
+  set(CMAKE_BUILD_TYPE Debug)
 endif()
 
 include_directories(${CMAKE_SOURCE_DIR}/src)
@@ -17,7 +17,10 @@ set(LIBHYBRIDFS_SRC
 set(DEPENDENCIES
   stdc++fs
   fuse3
+  gflags
 )
 
 add_executable(hybridfs hybridfs_main.cc ${LIBHYBRIDFS_SRC})
 target_link_libraries(hybridfs ${DEPENDENCIES})
+
+add_executable(testfs test/test.cc)
