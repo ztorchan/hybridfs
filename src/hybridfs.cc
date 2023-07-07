@@ -242,7 +242,7 @@ int HybridFS::hfs_symlink(const char *oldpath, const char *newpath) {
     spdlog::info("[symlink] target dentry exists");
     return -EEXIST;
   }
-  std::string real_old_path = HFS_META->fs_path + oldpath;
+  std::string real_old_path = oldpath;
   std::string real_new_path = HFS_META->ssd_path + newpath;
   spdlog::info("[symlink] real symlink from path {} to path {}", real_new_path.c_str(), real_old_path.c_str());
   if(symlink(real_old_path.c_str(), real_new_path.c_str()) == 0) {
@@ -435,7 +435,7 @@ int HybridFS::hfs_open(const char *path, struct fuse_file_info *fi) {
   spdlog::info("[open] path: {}, flags: {:#o}", path, fi->flags);
   struct hfs_dentry* target_dentry = find_dentry(path);
   if(target_dentry == nullptr) {
-    if((fi->flags & O_CREAT) != 0) {
+    if((fi->flags & O_CREAT) == 0) {
       // do not create
       spdlog::info("Not such dentry and don't create");
       return -ENOENT;
@@ -468,7 +468,7 @@ int HybridFS::hfs_open(const char *path, struct fuse_file_info *fi) {
     }
   } else {
     // file exists
-    if((fi->flags & O_EXCL) != 0) {
+    if((fi->flags & O_EXCL) != 0 && (fi->flags & O_CREAT) != 0) {
       // fail if exist
       spdlog::info("file exist");
       return -EEXIST ;
